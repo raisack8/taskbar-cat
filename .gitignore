@@ -1,0 +1,22 @@
+# ビルド成果物（配布は GitHub Releases で）
+*.exe
+*.pdb
+dist/
+
+# 個人データ（通常は %USERPROFILE%\.taskbar-cat に置かれるが、念のため）
+*.ini
+schedule.txt
+oneshot.txt
+messages.txt
+logs/
+
+# Python
+__pycache__/
+*.pyc
+
+# エディタ・OS
+.vs/
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
