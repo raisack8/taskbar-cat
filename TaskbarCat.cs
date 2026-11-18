@@ -67,6 +67,11 @@ class TaskbarCat : Form
     Fx ShownFx { get { return fxEnabled ? fx : Fx.None; } }
     static bool restart;
 
+    // アップデート（Update.cs）: 起動 1 分後と毎日 12:00 に確認し、見つかったら猫が知らせてメニューに出す
+    Updater.Release update;   // 見つかった新しい版。無ければ null
+    bool updateCheck = true, checkingUpdate, updating;
+    DateTime nextUpdateCheck;
+
     // ---- 状態 ----
     Rectangle wa;
     double x;           // 猫の中心のスクリーン x
@@ -192,11 +197,23 @@ class TaskbarCat : Form
             dataHome.Checked = dataSetting.Length == 0;
             dataPick.Checked = !dataHome.Checked;
         };
+        settings.MenuItems.Add("-");
+        var updCheckItem = settings.MenuItems.Add("アップデートを知らせる", (s, e) => { updateCheck = !updateCheck; SaveSettings(); });
+        settings.MenuItems.Add("アップデートを確認", (s, e) => CheckUpdate(true));
+        settings.Popup += (s, e) => updCheckItem.Checked = updateCheck;
         menu.MenuItems.Add("-");
         menu.MenuItems.Add("ポートを調べる", (s, e) => OpenPortForm());
         menu.MenuItems.Add("タスクマネージャー", (s, e) => Launch("taskmgr.exe"));
         menu.MenuItems.Add("コントロールパネル", (s, e) => Launch("control.exe"));
         menu.MenuItems.Add("-");
+        var updateItem = menu.MenuItems.Add("アップデート", (s, e) => StartUpdate());
+        updateItem.Visible = false;
+        menu.Popup += (s, e) =>
+        {
+            updateItem.Visible = update != null;
+            updateItem.Enabled = !updating;
+            if (update != null) updateItem.Text = "アップデート（v" + update.Ver + "）" + (updating ? " 中…" : "");
+        };
         menu.MenuItems.Add("再起動", (s, e) => { restart = true; Close(); });
         menu.MenuItems.Add("終了", (s, e) => Close());
         ContextMenu = menu;
@@ -220,6 +237,8 @@ class TaskbarCat : Form
             try { BeginInvoke((Action)(() => { if (hidden) SetHidden(false); else Say("にゃ？"); })); } catch { }
         }, null, -1, false);
         lastMinute = DateTime.Now.Ticks / TimeSpan.TicksPerMinute;   // 起動した分は実行しない
+        nextUpdateCheck = DateTime.Now.AddMinutes(1);   // ログオン直後はネットにつながっていないことがあるので少し待つ
+        Updater.CleanupOld();
         LoadSchedule(false);
         RegisterHotkeys();
         timer.Tick += (s, e) => Tick();
@@ -558,6 +577,7 @@ class TaskbarCat : Form
                 else if (k == "fx") fxEnabled = v != "0";
                 else if (k == "hide") hidden = v == "1";
                 else if (k == "data") dataSetting = v;
+                else if (k == "update") updateCheck = v != "0";
             }
         }
         catch { }
@@ -568,7 +588,8 @@ class TaskbarCat : Form
         try
         {
             File.WriteAllText(iniPath, "size=" + sizeMul.ToString(System.Globalization.CultureInfo.InvariantCulture) +
-                "\r\ntalk=" + (talkEnabled ? "1" : "0") + "\r\nfx=" + (fxEnabled ? "1" : "0") + "\r\nhide=" + (hidden ? "1" : "0") + "\r\ndata=" + dataSetting + "\r\n");
+                "\r\ntalk=" + (talkEnabled ? "1" : "0") + "\r\nfx=" + (fxEnabled ? "1" : "0") + "\r\nhide=" + (hidden ? "1" : "0") + "\r\ndata=" + dataSetting +
+                "\r\nupdate=" + (updateCheck ? "1" : "0") + "\r\n");
         }
         catch { }
     }
@@ -709,6 +730,12 @@ class TaskbarCat : Form
         long minute = t.Ticks / TimeSpan.TicksPerMinute;
         if (minute == lastMinute) return;
         lastMinute = minute;
+        if (t >= nextUpdateCheck)   // スリープ等で 12:00 を過ぎていたら、起きた時に確認する
+        {
+            var noon = t.Date.AddHours(12);
+            nextUpdateCheck = noon > t ? noon : noon.AddDays(1);
+            if (updateCheck) CheckUpdate(false);
+        }
         try { if (File.GetLastWriteTime(schedPath) != schedStamp) LoadSchedule(true); } catch { }
         try { if (File.GetLastWriteTime(oneShotPath) != oneShotStamp) RegisterHotkeys(); } catch { }   // メモ帳で直接編集された時
         foreach (var e in sched)
@@ -824,6 +851,75 @@ class TaskbarCat : Form
             }
         }
         catch { }
+    }
+
+    // 新しい版があるか裏で確認する。manual: メニューから確認した時（結果を必ずしゃべる）
+    void CheckUpdate(bool manual)
+    {
+        if (checkingUpdate || updating) return;
+        checkingUpdate = true;
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            Updater.Release r = null;
+            string err = null;
+            try { r = Updater.FindNewer(); } catch (Exception ex) { err = ex.Message; }
+            try
+            {
+                BeginInvoke((Action)(() =>
+                {
+                    checkingUpdate = false;
+                    if (err != null)
+                    {
+                        Log("[アップデート] 確認できませんでした : " + err);
+                        if (manual) { Say("にゃぅ…（確認できなかった）", true); ShowFx(Fx.Sweat, 3000); }
+                        return;
+                    }
+                    if (r == null) { if (manual) Say("最新だにゃ (v" + Updater.Version + ")", true); return; }
+                    if (update == null || update.Ver != r.Ver) Log("[アップデート] v" + r.Ver + " があります（今は v" + Updater.Version + "）");
+                    update = r;
+                    // 大事なお知らせなので「しゃべる」OFF でも出す（多くても 1 日 2 回）
+                    Say("v" + r.Ver + " が出たにゃ！\n右クリック →「アップデート」", true);
+                    ShowFx(Fx.Bang, 3000);
+                }));
+            }
+            catch { }   // 終了処理中
+        });
+    }
+
+    // メニューの「アップデート」: ダウンロード → 署名を確認 → exe を差し替え → 再起動
+    void StartUpdate()
+    {
+        var r = update;
+        if (r == null || updating) return;
+        updating = true;
+        Say("アップデート中にゃ…", true);
+        Log("[アップデート] v" + r.Ver + " をダウンロード : " + r.ExeUrl);
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            string err = null, note = null;
+            try { note = Updater.Apply(r); } catch (Exception ex) { err = ex.Message; }
+            try
+            {
+                BeginInvoke((Action)(() =>
+                {
+                    updating = false;
+                    if (err != null)
+                    {
+                        Log("[アップデート] 失敗 : " + err);
+                        Say("にゃぅ…", true);
+                        ShowFx(Fx.Sweat, 3000);
+                        if (MessageBox.Show(this, "アップデートできませんでした。\n\n" + err + "\n\nリリースのページを開きますか？", "TaskbarCat",
+                            MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
+                            try { System.Diagnostics.Process.Start(Updater.ReleasesPage); } catch { }
+                        return;
+                    }
+                    Log("[アップデート] v" + Updater.Version + " → v" + r.Ver + " に差し替えました。再起動します" + (note != null ? "\r\n    " + note : ""));
+                    restart = true;
+                    Close();
+                }));
+            }
+            catch { }
+        });
     }
 
     ScheduleForm schedForm;

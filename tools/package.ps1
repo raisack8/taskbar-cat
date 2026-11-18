@@ -15,7 +15,7 @@ if (-not $built) { throw "build.bat が失敗しました" }
 
 $include = @(
     'README.md', 'LICENSE', 'build.bat', 'package.bat',
-    'TaskbarCat.cs', 'Schedule.cs', 'ScheduleForm.cs', 'OneShot.cs', 'Ports.cs', 'TaskbarCat.exe',
+    'TaskbarCat.cs', 'Schedule.cs', 'ScheduleForm.cs', 'OneShot.cs', 'Ports.cs', 'Update.cs', 'TaskbarCat.exe',
     'tools\build_sprites.py', 'tools\analyze.py', 'tools\package.ps1', 'tools\sign.ps1',
     'assets\sprites', 'assets\raw'
 )

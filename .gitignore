@@ -1,5 +1,7 @@
 # ビルド成果物（配布は GitHub Releases で）
 *.exe
+*.exe.new
+*.exe.old
 *.pdb
 dist/
 
